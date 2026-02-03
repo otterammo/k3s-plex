@@ -12,6 +12,6 @@ spec:
     app: plex
   ports:
     - name: plex
-      port: 32400
+      port: 80
       targetPort: 32400
       protocol: TCP
