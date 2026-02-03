@@ -64,7 +64,7 @@ Media directories are mounted read-only to prevent accidental deletion or modifi
 
 Plex is exposed via Tailscale with hostname `plex`:
 
-- **Web UI**: `http://plex.<your-tailnet>.ts.net:32400/web`
+- **Web UI**: `http://plex.<your-tailnet>.ts.net/web`
 - Secure, encrypted access from anywhere on your Tailscale network
 - No port forwarding or public exposure required
 
@@ -72,7 +72,7 @@ Plex is exposed via Tailscale with hostname `plex`:
 
 If you're on the same network as your cluster nodes:
 
-- **Direct IP**: `http://<any-node-ip>:32400/web`
+- **Direct IP**: `http://<any-node-ip>/web`
 - Note: Service is ClusterIP, so direct access requires being on the cluster network
 
 ## Initial Setup
