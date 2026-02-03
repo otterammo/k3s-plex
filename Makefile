@@ -1,3 +1,4 @@
+SHELL := /bin/bash
 KUBECONFIG ?= ../k3s-infra/kubeconfig
 KUBE := KUBECONFIG=$(KUBECONFIG) kubectl
 
