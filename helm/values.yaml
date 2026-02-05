@@ -69,12 +69,8 @@ extraEnv:
   PLEX_GID: "1000"
   ALLOWED_NETWORKS: "10.42.0.0/16,10.43.0.0/16"
 
-# Extra volumes for media and transcode
+# Extra volumes for media (transcode is handled by chart's default emptyDir)
 extraVolumes:
-  # Transcode PVC (separate from config for performance)
-  - name: transcode
-    persistentVolumeClaim:
-      claimName: plex-transcode
   # TV shows - read-only hostPath
   - name: tv
     hostPath:
@@ -93,8 +89,6 @@ extraVolumes:
 
 # Extra volume mounts
 extraVolumeMounts:
-  - name: transcode
-    mountPath: /transcode
   - name: tv
     mountPath: /media/tv
     readOnly: true
