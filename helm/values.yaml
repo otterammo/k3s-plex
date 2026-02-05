@@ -53,7 +53,7 @@ pms:
 # Service configuration with Tailscale annotations
 service:
   type: ClusterIP
-  port: 32400
+  port: 80
   annotations:
     tailscale.com/expose: "true"
     tailscale.com/hostname: "plex"
