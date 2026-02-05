@@ -1,0 +1,133 @@
+# Plex Media Server Helm Values
+# Migrated from manual manifests to official helm chart
+
+# Image configuration - pinned version for stability
+image:
+  registry: index.docker.io
+  repository: plexinc/pms-docker
+  # Pin to specific version instead of 'latest' for predictability
+  tag: "1.42.2.10156-f737b826c"
+  pullPolicy: IfNotPresent
+
+# Use existing PVCs created outside helm chart
+pms:
+  # Reference existing 20Gi Longhorn PVC for config/metadata
+  configExistingClaim: "plex-config"
+
+  # Claim secret for initial server setup
+  claimSecret:
+    name: "plex-claim-token"
+    key: "PLEX_CLAIM"
+
+  # Resource limits matching current deployment
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "2Gi"
+    limits:
+      cpu: "4000m"
+      memory: "8Gi"
+
+  # Security context (can be enabled for QuickSync later)
+  securityContext: {}
+
+  # Probes for health checking
+  livenessProbe:
+    httpGet:
+      path: /identity
+      port: 32400
+    initialDelaySeconds: 60
+    periodSeconds: 60
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /identity
+      port: 32400
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+# Service configuration with Tailscale annotations
+service:
+  type: ClusterIP
+  port: 32400
+  annotations:
+    tailscale.com/expose: "true"
+    tailscale.com/hostname: "plex"
+
+# Pin to control-plane node with external storage
+nodeSelector:
+  storage: external
+
+# Environment variables matching current deployment
+extraEnv:
+  TZ: "America/Chicago"
+  PLEX_UID: "1000"
+  PLEX_GID: "1000"
+  ALLOWED_NETWORKS: "10.42.0.0/16,10.43.0.0/16"
+
+# Extra volumes for media and transcode
+extraVolumes:
+  # Transcode PVC (separate from config for performance)
+  - name: transcode
+    persistentVolumeClaim:
+      claimName: plex-transcode
+  # TV shows - read-only hostPath
+  - name: tv
+    hostPath:
+      path: /mnt/external/tv
+      type: DirectoryOrCreate
+  # Movies - read-only hostPath
+  - name: movies
+    hostPath:
+      path: /mnt/external/movies
+      type: DirectoryOrCreate
+  # Optional: Intel QuickSync (uncomment when needed)
+  # - name: dev-dri
+  #   hostPath:
+  #     path: /dev/dri
+  #     type: Directory
+
+# Extra volume mounts
+extraVolumeMounts:
+  - name: transcode
+    mountPath: /transcode
+  - name: tv
+    mountPath: /media/tv
+    readOnly: true
+  - name: movies
+    mountPath: /media/movies
+    readOnly: true
+  # Optional: Intel QuickSync (uncomment when needed)
+  # - name: dev-dri
+  #   mountPath: /dev/dri
+
+# StatefulSet configuration
+statefulSet:
+  annotations: {}
+  podAnnotations: {}
+
+# Disable ingress (using Tailscale instead)
+ingress:
+  enabled: false
+
+httpRoute:
+  enabled: false
+
+# Disable rclone sidecar (not needed)
+rclone:
+  enabled: false
+
+# Service account
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+
+# No GPU configuration initially (can be enabled later)
+# pms:
+#   gpu:
+#     nvidia:
+#       enabled: false

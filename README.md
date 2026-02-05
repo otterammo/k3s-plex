@@ -4,11 +4,35 @@ Plex Media Server deployment for the k3s cluster.
 
 ## Overview
 
-This repository contains Kubernetes manifests for deploying Plex Media Server to your k3s cluster using the established GitOps pattern with ArgoCD.
+This repository deploys Plex Media Server to your k3s cluster using the official Plex helm chart with custom values, following the established GitOps pattern with ArgoCD.
 
-## Deployment
+## Deployment Architecture
 
-This repo is deployed automatically by ArgoCD from the `k3s-infra` cluster bootstrap. ArgoCD watches the `manifests/` directory on the `main` branch and automatically syncs changes.
+This deployment uses the official Plex Media Server helm chart with custom configuration:
+
+- **Chart**: `plex-media-server` from https://raw.githubusercontent.com/plexinc/pms-docker/gh-pages
+- **Custom Values**: `helm/values.yaml` (version-controlled in this repo)
+- **PVCs**: Managed separately in `manifests/` directory (outside helm control)
+- **ArgoCD**: Multi-source application combining helm chart + custom values + PVC manifests
+
+### Repository Structure
+
+```
+k3s-plex/
+├── helm/
+│   └── values.yaml          # Custom helm chart configuration
+├── manifests/
+│   ├── pvc-config.yaml      # 20Gi Longhorn PVC for config
+│   └── pvc-transcode.yaml   # 15Gi Longhorn PVC for transcode
+├── scripts/
+│   └── create-secret.sh     # Plex claim token secret creation
+├── Makefile                 # Local development helpers
+└── README.md
+```
+
+### Auto-Deployment
+
+This repo is deployed automatically by ArgoCD from the `k3s-infra` cluster bootstrap. ArgoCD watches the `helm/` and `manifests/` directories on the `main` branch and automatically syncs changes.
 
 ### Prerequisites
 
@@ -30,11 +54,14 @@ cp .env.example .env
 # Edit .env and add PLEX_CLAIM_TOKEN (valid for 4 minutes)
 vim .env
 
-# Deploy all resources
-make deploy
+# Add Plex helm repo and deploy
+make deploy  # Installs PVCs, helm chart, and waits for ready
 
 # Check status
 make status
+
+# Preview generated manifests
+make helm-template
 ```
 
 ## Storage Architecture
@@ -94,26 +121,41 @@ If you're on the same network as your cluster nodes:
 
 If your cluster nodes have Intel CPUs with QuickSync support:
 
-1. Edit [manifests/deployment.yaml](manifests/deployment.yaml)
+1. Edit [helm/values.yaml](helm/values.yaml)
 2. Uncomment the hardware acceleration sections:
    ```yaml
-   securityContext:
-     privileged: true
+   pms:
+     securityContext:
+       privileged: true
    ```
-   And:
-   ```yaml
-   - name: dev-dri
-     mountPath: /dev/dri
-   ```
-   And:
+   And in `extraVolumes`:
    ```yaml
    - name: dev-dri
      hostPath:
        path: /dev/dri
+       type: Directory
+   ```
+   And in `extraVolumeMounts`:
+   ```yaml
+   - name: dev-dri
+     mountPath: /dev/dri
    ```
 3. Commit and push changes
 4. ArgoCD will auto-sync and restart the pod
 5. Verify in Plex: Settings → Transcoder → Use hardware acceleration when available
+
+### NVIDIA GPU Support
+
+To enable NVIDIA GPU acceleration, add to [helm/values.yaml](helm/values.yaml):
+
+```yaml
+pms:
+  gpu:
+    nvidia:
+      enabled: true
+      devices: "all"
+      capabilities: "compute,video,utility"
+```
 
 ## Adding Media
 
@@ -182,10 +224,14 @@ If you need to completely rebuild:
 kubectl get pvc -n plex
 
 # Check pod events
-kubectl describe pod -n plex -l app=plex
+kubectl describe pod -n plex -l app.kubernetes.io/name=plex-media-server
 
 # Check logs
-kubectl logs -n plex -l app=plex --tail=100
+kubectl logs -n plex -l app.kubernetes.io/name=plex-media-server --tail=100
+
+# Check helm release status
+helm list -n plex
+helm status plex -n plex
 ```
 
 **Common issues:**
@@ -210,7 +256,7 @@ tailscale status | grep plex
 
 ```bash
 # Verify media mounts inside pod
-kubectl exec -n plex deploy/plex -- ls -la /media/tv /media/movies
+kubectl exec -n plex statefulset/plex -- ls -la /media/tv /media/movies
 
 # Check directory permissions (should be readable by UID 1000)
 # SSH to control-plane node
@@ -227,7 +273,7 @@ sudo chmod -R 755 /mnt/external/tv /mnt/external/movies
 
 ```bash
 # Check transcode PVC space
-kubectl exec -n plex deploy/plex -- df -h /transcode
+kubectl exec -n plex statefulset/plex -- df -h /transcode
 
 # Increase PVC size if full
 kubectl patch pvc plex-transcode -n plex -p '{"spec":{"resources":{"requests":{"storage":"100Gi"}}}}'
@@ -249,33 +295,43 @@ kubectl patch pvc plex-transcode -n plex -p '{"spec":{"resources":{"requests":{"
 
 ### Updating Plex
 
-The deployment uses `plexinc/pms-docker:latest` which auto-updates. To manually update:
+The deployment uses a pinned image version for stability. To update to a new version:
+
+1. Check available versions at https://hub.docker.com/r/plexinc/pms-docker/tags
+2. Edit [helm/values.yaml](helm/values.yaml):
+   ```yaml
+   image:
+     tag: "1.43.0.12345-abcdef123"  # Update to desired version
+   ```
+3. Commit and push changes
+4. ArgoCD will auto-sync and restart the pod
+
+To manually force an update:
 
 ```bash
-# Force pod restart to pull latest image
-kubectl rollout restart deployment/plex -n plex
-```
+# Force pod restart
+kubectl rollout restart statefulset/plex -n plex
 
-To pin to specific version, edit [manifests/deployment.yaml](manifests/deployment.yaml):
-```yaml
-image: plexinc/pms-docker:1.40.0.7775-456fbaf97
+# Or upgrade helm release locally
+make install-helm
 ```
 
 ### Scaling Resources
 
-Edit [manifests/deployment.yaml](manifests/deployment.yaml) and adjust:
+Edit [helm/values.yaml](helm/values.yaml) and adjust:
 
 ```yaml
-resources:
-  requests:
-    cpu: "2000m"      # Adjust based on usage
-    memory: "4Gi"
-  limits:
-    cpu: "6000m"
-    memory: "12Gi"
+pms:
+  resources:
+    requests:
+      cpu: "2000m"      # Adjust based on usage
+      memory: "4Gi"
+    limits:
+      cpu: "6000m"
+      memory: "12Gi"
 ```
 
-Commit and push - ArgoCD will auto-sync.
+Commit and push - ArgoCD will auto-sync and restart the pod.
 
 ### Monitoring
 
@@ -284,7 +340,11 @@ Commit and push - ArgoCD will auto-sync.
 kubectl top pod -n plex
 
 # View logs
-kubectl logs -n plex -l app=plex -f
+kubectl logs -n plex -l app.kubernetes.io/name=plex-media-server -f
+
+# Check helm release
+helm list -n plex
+helm status plex -n plex
 
 # Check ArgoCD sync status
 kubectl get application plex -n argocd
@@ -302,12 +362,50 @@ kubectl get application plex -n argocd
 
 ```bash
 make help          # Show available targets
-make deploy        # Full deployment (secret + manifests)
+make deploy        # Full deployment (secret + PVCs + helm chart)
 make create-secret # Create Plex claim token secret
-make apply         # Apply Kubernetes manifests
+make apply-pvcs    # Apply PVC manifests only
+make install-helm  # Install/upgrade helm chart
+make helm-template # Preview generated Kubernetes manifests
 make status        # Show Plex resources status
-make destroy       # Remove Plex (with confirmation)
+make clean         # Remove Plex but keep PVCs
+make destroy       # Remove Plex completely (with confirmation)
 ```
+
+## Customizing Helm Values
+
+All Plex configuration is in [helm/values.yaml](helm/values.yaml). Common customizations:
+
+### Change Timezone
+```yaml
+extraEnv:
+  TZ: "America/New_York"
+```
+
+### Adjust Resource Limits
+```yaml
+pms:
+  resources:
+    limits:
+      cpu: "8000m"
+      memory: "16Gi"
+```
+
+### Add Additional Media Directories
+```yaml
+extraVolumes:
+  - name: music
+    hostPath:
+      path: /mnt/external/music
+      type: DirectoryOrCreate
+
+extraVolumeMounts:
+  - name: music
+    mountPath: /media/music
+    readOnly: true
+```
+
+After making changes, commit and push - ArgoCD will automatically sync.
 
 ## License
 
